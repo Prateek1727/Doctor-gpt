@@ -10,7 +10,7 @@ from langchain_core.prompts.prompt import PromptTemplate
 from langchain_huggingface import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_core.documents import Document  # Use LangChain's built-in Document
+from langchain_core.documents import Document  # Use built-in Document class
 import pandas as pd
 import torch
 from loguru import logger
@@ -33,23 +33,23 @@ os.environ['GROQ_API_KEY'] = groq_api_key
 # Define paths
 INDEX_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'index')
 DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Data', 'train.csv')
-TRAIN_CSV_URL = "YOUR_GOOGLE_DRIVE_OR_S3_URL_HERE"  # <-- SET THIS TO YOUR ACTUAL URL!
+TRAIN_CSV_URL = "YOUR_GOOGLE_DRIVE_OR_S3_URL_HERE"  # <-- SET THIS TO YOUR ACTUAL PUBLIC CSV URL!
 EMBEDDINGS_FILE = os.path.join(INDEX_DIR, 'embeddings.npy')
 INDEX_FILE = os.path.join(INDEX_DIR, 'faiss_index.bin')
 CHUNKS_FILE = os.path.join(INDEX_DIR, 'text_chunks.pkl')
 
-# Ensure index directory exists
+# Ensure index and data directories exist
 os.makedirs(INDEX_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
 
 def download_train_csv():
     if not os.path.exists(DATA_PATH):
         if TRAIN_CSV_URL == "YOUR_GOOGLE_DRIVE_OR_S3_URL_HERE":
-            logger.error("TRAIN_CSV_URL is not set. Please set it to your file URL.")
+            logger.error("TRAIN_CSV_URL is not set. Please set it to your actual file URL.")
             raise ValueError("TRAIN_CSV_URL is not set.")
         logger.info(f"Downloading train.csv from {TRAIN_CSV_URL}")
         try:
-            response = requests.get(TRAIN_CSV_URL, stream=True)
+            response = requests.get(TRAIN_CSV_URL, stream=True, timeout=60)
             response.raise_for_status()
             with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_file:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -57,6 +57,10 @@ def download_train_csv():
                 tmp_file_path = tmp_file.name
             os.rename(tmp_file_path, DATA_PATH)
             logger.info(f"Downloaded train.csv to {DATA_PATH}")
+            # Check file size after download
+            if os.path.getsize(DATA_PATH) < 10:
+                logger.error("Downloaded train.csv is too small or empty!")
+                raise ValueError("Downloaded train.csv is too small or empty!")
         except Exception as e:
             logger.error(f"Failed to download train.csv: {e}")
             raise
