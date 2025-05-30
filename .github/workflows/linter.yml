@@ -1,0 +1,29 @@
+name: Super-Linter
+
+on:
+  push:
+    branches:
+      - main  # Lint code on every push to the main branch
+  pull_request:
+    branches:
+      - main  # Lint code on pull requests targeting the main branch
+
+jobs:
+  lint:
+    name: Lint Code Base
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2: Run Super-Linter
+      - name: Run Super-Linter
+        uses: github/super-linter@v5
+        env:
+          DEFAULT_BRANCH: main  # Specify your default branch
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Required for Super-Linter to annotate pull requests
+          VALIDATE_PYTHON_PYLINT: true  # Enable Python linting with Pylint
+          VALIDATE_ALL_CODEBASE: true  # Lint all files, not just changed ones
+          PYTHON_VERSION: "3.11"  # Specify Python version for linting

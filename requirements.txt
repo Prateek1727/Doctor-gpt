@@ -1,0 +1,14 @@
+langchain==0.3.14
+pypdf==5.1.0
+python-dotenv==1.0.1
+langchain-pinecone==0.2.0
+langchain-community==0.3.14
+langchain-groq==0.2.2
+langchain-huggingface==0.1.2
+loguru==0.7.3
+streamlit==1.41.1
+streamlit-chat==0.1.1
+pytest==8.3.4
+pytest-mock==3.14.0
+-e .
+faiss-cpu==1.7.4
