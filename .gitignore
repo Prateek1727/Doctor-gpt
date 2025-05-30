@@ -171,8 +171,8 @@ cython_debug/
 .pypirc
 
 
-*.csv
-*.npy
-*.bin
-*.pkl
-*.pdf
+.csv
+.npy
+.bin
+.pkl
+.pdf
