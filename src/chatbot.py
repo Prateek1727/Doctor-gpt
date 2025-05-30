@@ -1,5 +1,4 @@
 import os
-import warnings
 from dotenv import load_dotenv
 import faiss
 import numpy as np
@@ -7,21 +6,15 @@ import pickle
 from langchain_groq import ChatGroq
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts.prompt import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_core.documents import Document  # Use built-in Document class
 import pandas as pd
 import torch
 from loguru import logger
-import requests
-import tempfile
-
-# Suppress torch.classes warning
-warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 
 # Load environment variables
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
+load_dotenv(dotenv_path='D:\\doctor_gpt_final\\.env')
 
 # Validate GROQ_API_KEY
 groq_api_key = os.getenv("GROQ_API_KEY")
@@ -30,59 +23,21 @@ if groq_api_key is None:
     raise ValueError("GROQ_API_KEY not set.")
 os.environ['GROQ_API_KEY'] = groq_api_key
 
-# Define paths
-INDEX_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'index')
-DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Data', 'train.csv')
-TRAIN_CSV_URL = "YOUR_GOOGLE_DRIVE_OR_S3_URL_HERE"  # <-- SET THIS TO YOUR ACTUAL PUBLIC CSV URL!
-EMBEDDINGS_FILE = os.path.join(INDEX_DIR, 'embeddings.npy')
-INDEX_FILE = os.path.join(INDEX_DIR, 'faiss_index.bin')
-CHUNKS_FILE = os.path.join(INDEX_DIR, 'text_chunks.pkl')
-
-# Ensure index and data directories exist
-os.makedirs(INDEX_DIR, exist_ok=True)
-os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
-
-def download_train_csv():
-    if not os.path.exists(DATA_PATH):
-        if TRAIN_CSV_URL == "YOUR_GOOGLE_DRIVE_OR_S3_URL_HERE":
-            logger.error("TRAIN_CSV_URL is not set. Please set it to your actual file URL.")
-            raise ValueError("TRAIN_CSV_URL is not set.")
-        logger.info(f"Downloading train.csv from {TRAIN_CSV_URL}")
-        try:
-            response = requests.get(TRAIN_CSV_URL, stream=True, timeout=60)
-            response.raise_for_status()
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_file:
-                for chunk in response.iter_content(chunk_size=8192):
-                    tmp_file.write(chunk)
-                tmp_file_path = tmp_file.name
-            os.rename(tmp_file_path, DATA_PATH)
-            logger.info(f"Downloaded train.csv to {DATA_PATH}")
-            # Check file size after download
-            if os.path.getsize(DATA_PATH) < 10:
-                logger.error("Downloaded train.csv is too small or empty!")
-                raise ValueError("Downloaded train.csv is too small or empty!")
-        except Exception as e:
-            logger.error(f"Failed to download train.csv: {e}")
-            raise
-
+# ---------------------------- FAISS Indexing (Run Once) --------------------------------------
 def create_medical_index():
-    download_train_csv()
-    if not os.path.exists(DATA_PATH):
-        logger.error(f"Data file not found: {DATA_PATH}")
-        raise FileNotFoundError(f"Data file not found: {DATA_PATH}")
+    data_path = 'D:\\doctor_gpt_final\\Data\\train.csv'
+    if not os.path.exists(data_path):
+        logger.error(f"Data file not found: {data_path}")
+        raise FileNotFoundError(f"Data file not found: {data_path}")
 
-    df = pd.read_csv(DATA_PATH, encoding='utf-8', encoding_errors='replace')
+    df = pd.read_csv(data_path, encoding='utf-8', encoding_errors='replace')
     documents = []
     for _, row in df.iterrows():
         input_text = str(row.get('input', '')) if 'input' in row else ''
         output_text = str(row.get('output', '')) if 'output' in row else ''
         text = f"{input_text} {output_text}".strip()
         if text:
-            documents.append(Document(page_content=text, metadata={}))
-
-    if not documents:
-        logger.error("No data found in CSV, cannot build index.")
-        raise ValueError("No data found in CSV, cannot build index.")
+            documents.append(Document(page_content=text))
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=8000, chunk_overlap=20)
     text_chunks = text_splitter.split_documents(documents)
@@ -91,34 +46,38 @@ def create_medical_index():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = SentenceTransformer('all-MiniLM-L6-v2', device=device)
     texts = [chunk.page_content for chunk in text_chunks]
+    embeddings_file = 'D:\\doctor_gpt_final\\embeddings.npy'
 
-    if os.path.exists(EMBEDDINGS_FILE):
+    if os.path.exists(embeddings_file):
         logger.info("Loading precomputed embeddings...")
-        chunk_embeddings = np.load(EMBEDDINGS_FILE)
+        chunk_embeddings = np.load(embeddings_file)
         if chunk_embeddings.shape[0] != len(texts):
             logger.warning(f"Embedding mismatch: {chunk_embeddings.shape[0]} vs {len(texts)}. Re-embedding...")
             chunk_embeddings = model.encode(texts, batch_size=128, show_progress_bar=True)
             chunk_embeddings = np.array(chunk_embeddings, dtype=np.float32)
-            np.save(EMBEDDINGS_FILE, chunk_embeddings)
+            np.save(embeddings_file, chunk_embeddings)
     else:
         logger.info(f"Embedding {len(texts)} chunks...")
         chunk_embeddings = model.encode(texts, batch_size=128, show_progress_bar=True)
         chunk_embeddings = np.array(chunk_embeddings, dtype=np.float32)
-        np.save(EMBEDDINGS_FILE, chunk_embeddings)
-        logger.info(f"Saved {len(chunk_embeddings)} embeddings to {EMBEDDINGS_FILE}")
+        np.save(embeddings_file, chunk_embeddings)
+        logger.info(f"Saved {len(chunk_embeddings)} embeddings to {embeddings_file}")
 
     dimension = 384
     index = faiss.IndexFlatL2(dimension)
     index.add(chunk_embeddings)
     logger.info(f"FAISS index created with {index.ntotal} vectors")
 
-    faiss.write_index(index, INDEX_FILE)
-    with open(CHUNKS_FILE, 'wb') as f:
+    faiss.write_index(index, 'D:\\doctor_gpt_final\\faiss_index.bin')
+    with open('D:\\doctor_gpt_final\\text_chunks.pkl', 'wb') as f:
         pickle.dump(text_chunks, f)
     logger.info("FAISS index and text chunks saved")
 
-# Check and create index if missing
-if not os.path.exists(INDEX_FILE):
+class Document:
+    def __init__(self, page_content):
+        self.page_content = page_content
+
+if not os.path.exists('D:\\doctor_gpt_final\\faiss_index.bin'):
     create_medical_index()
 
 # ---------------------------- FAISS Setup --------------------------------------
@@ -126,8 +85,8 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 logger.info(f"Using device: {device}")
 
 try:
-    index = faiss.read_index(INDEX_FILE)
-    with open(CHUNKS_FILE, 'rb') as f:
+    index = faiss.read_index('D:\\doctor_gpt_final\\faiss_index.bin')
+    with open('D:\\doctor_gpt_final\\text_chunks.pkl', 'rb') as f:
         text_chunks = pickle.load(f)
     logger.info(f"Loaded FAISS index with {index.ntotal} vectors")
 except Exception as e:
@@ -148,6 +107,7 @@ def search_db(user_query: str, k: int = 3) -> list:
         logger.error(f"Error in search_db: {e}")
         return []
 
+# ---------------------------- LLM --------------------------------------
 llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
 
 def doctor_gpt_ai(user_query: str) -> str:
@@ -196,3 +156,12 @@ def doctor_gpt(user_query: str) -> str:
     """
     logger.info(f"Processing medical query: {user_query}")
     return doctor_gpt_ai(user_query=user_query)
+
+# Existing gita_chatbot code (preserved)
+def gita_chatbot(user_query: str) -> str:
+    logger.info("Searching for similar docs in the Bhagavad Gita vector DB")
+    doc_list = search_db(user_query=user_query)
+    logger.info("Calling the gitabot_ai to get answer")
+    answer = gitabot_ai(user_query=user_query, doc_list=doc_list)
+    logger.info("Returning the final answer")
+    return answer
