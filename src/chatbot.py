@@ -1,4 +1,5 @@
 import os
+import subprocess
 from dotenv import load_dotenv
 import faiss
 import numpy as np
@@ -6,15 +7,21 @@ import pickle
 from langchain_groq import ChatGroq
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts.prompt import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
+from langchain_huggingface import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
 import pandas as pd
 import torch
 from loguru import logger
 
+# Suppress torch warnings
+import logging
+logging.getLogger('torch').setLevel(logging.ERROR)
+
 # Load environment variables
-load_dotenv(dotenv_path='D:\\doctor_gpt_final\\.env')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, '..', '.env'))
 
 # Validate GROQ_API_KEY
 groq_api_key = os.getenv("GROQ_API_KEY")
@@ -23,14 +30,92 @@ if groq_api_key is None:
     raise ValueError("GROQ_API_KEY not set.")
 os.environ['GROQ_API_KEY'] = groq_api_key
 
-# ---------------------------- FAISS Indexing (Run Once) --------------------------------------
-def create_medical_index():
-    data_path = 'D:\\doctor_gpt_final\\Data\\train.csv'
-    if not os.path.exists(data_path):
-        logger.error(f"Data file not found: {data_path}")
-        raise FileNotFoundError(f"Data file not found: {data_path}")
+# File download utility using gdown (for train.csv only)
+def download_file(file_id, dest_path):
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    logger.info(f"Downloading {dest_path} with file ID {file_id}")
+    try:
+        url = f"https://drive.google.com/uc?id={file_id}"
+        result = subprocess.run(['gdown', url, '-O', dest_path], check=True, capture_output=True, text=True)
+        logger.info(f"Successfully downloaded {dest_path}")
+        # Verify file is not HTML
+        with open(dest_path, 'rb') as f:
+            header = f.read(20).decode('utf-8', errors='ignore')
+            if header.startswith('<!DOCTYPE') or header.startswith('<html'):
+                logger.error(f"Downloaded file {dest_path} is HTML, not binary data")
+                os.remove(dest_path)
+                raise ValueError(f"Invalid file content for {dest_path}: got HTML")
+        # Check file size
+        file_size = os.path.getsize(dest_path)
+        if file_size < 1000:
+            logger.error(f"Downloaded file {dest_path} is too small ({file_size} bytes)")
+            os.remove(dest_path)
+            raise ValueError(f"Invalid file size for {dest_path}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to download {file_id}: {e.stderr}")
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download {file_id}: {e}")
+        raise
 
-    df = pd.read_csv(data_path, encoding='utf-8', encoding_errors='replace')
+# File IDs (Google Drive file ID for train.csv only)
+FILE_IDS = {
+    'train.csv': '1J8ne-L_Wwl73JBl8aLFnLJpYtIsc5pxz'
+}
+
+# Validate file content
+def is_valid_file(file_path, expected_ext):
+    try:
+        with open(file_path, 'rb') as f:
+            header = f.read(20).decode('utf-8', errors='ignore')
+            if header.startswith('<!DOCTYPE') or header.startswith('<html'):
+                logger.error(f"File {file_path} contains HTML content")
+                return False
+        file_size = os.path.getsize(file_path)
+        if file_size < 1000:
+            logger.error(f"File {file_path} is too small ({file_size} bytes)")
+            return False
+        if expected_ext == '.npy':
+            try:
+                np.load(file_path, allow_pickle=True)
+            except Exception as e:
+                logger.error(f"Invalid .npy file {file_path}: {e}")
+                return False
+        elif expected_ext == '.pkl':
+            try:
+                with open(file_path, 'rb') as f:
+                    pickle.load(f)
+            except Exception as e:
+                logger.error(f"Invalid .pkl file {file_path}: {e}")
+                return False
+        elif expected_ext == '.bin':
+            try:
+                faiss.read_index(file_path)
+            except Exception as e:
+                logger.error(f"Invalid .bin file {file_path}: {e}")
+                return False
+        return True
+    except Exception as e:
+        logger.error(f"Error validating file {file_path}: {e}")
+        return False
+
+# ---------------------------- FAISS Indexing (Run Once) --------------------------------------
+def create_medical_index(max_chunks=None):
+    data_path = os.path.join(BASE_DIR, '..', 'Data', 'train.csv')
+    if not os.path.exists(data_path):
+        logger.info(f"Data file not found locally, attempting to download...")
+        try:
+            download_file(FILE_IDS['train.csv'], data_path)
+        except Exception as e:
+            logger.error(f"Failed to download train.csv: {e}")
+            raise ValueError("Cannot proceed without train.csv")
+
+    try:
+        df = pd.read_csv(data_path, encoding='utf-8', encoding_errors='replace')
+    except Exception as e:
+        logger.error(f"Failed to read train.csv: {e}")
+        raise ValueError("Invalid train.csv file")
+
     documents = []
     for _, row in df.iterrows():
         input_text = str(row.get('input', '')) if 'input' in row else ''
@@ -39,59 +124,80 @@ def create_medical_index():
         if text:
             documents.append(Document(page_content=text))
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=8000, chunk_overlap=20)
+    if not documents:
+        logger.error("No valid documents extracted from train.csv")
+        raise ValueError("Empty document list")
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=4000, chunk_overlap=20)
     text_chunks = text_splitter.split_documents(documents)
+    if max_chunks:
+        text_chunks = text_chunks[:max_chunks]
     logger.info(f"Created {len(text_chunks)} chunks")
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = SentenceTransformer('all-MiniLM-L6-v2', device=device)
-    texts = [chunk.page_content for chunk in text_chunks]
-    embeddings_file = 'D:\\doctor_gpt_final\\embeddings.npy'
+    embeddings_file = os.path.join(BASE_DIR, 'embeddings.npy')
 
-    if os.path.exists(embeddings_file):
-        logger.info("Loading precomputed embeddings...")
-        chunk_embeddings = np.load(embeddings_file)
-        if chunk_embeddings.shape[0] != len(texts):
-            logger.warning(f"Embedding mismatch: {chunk_embeddings.shape[0]} vs {len(texts)}. Re-embedding...")
-            chunk_embeddings = model.encode(texts, batch_size=128, show_progress_bar=True)
-            chunk_embeddings = np.array(chunk_embeddings, dtype=np.float32)
-            np.save(embeddings_file, chunk_embeddings)
-    else:
-        logger.info(f"Embedding {len(texts)} chunks...")
-        chunk_embeddings = model.encode(texts, batch_size=128, show_progress_bar=True)
-        chunk_embeddings = np.array(chunk_embeddings, dtype=np.float32)
-        np.save(embeddings_file, chunk_embeddings)
-        logger.info(f"Saved {len(chunk_embeddings)} embeddings to {embeddings_file}")
+    # Process embeddings in batches
+    batch_size = 500
+    chunk_embeddings = []
+    for i in range(0, len(text_chunks), batch_size):
+        batch_texts = [chunk.page_content for chunk in text_chunks[i:i+batch_size]]
+        logger.info(f"Embedding batch {i//batch_size + 1}/{(len(text_chunks)-1)//batch_size + 1} ({len(batch_texts)} chunks)")
+        batch_embeddings = model.encode(batch_texts, batch_size=128, show_progress_bar=True)
+        chunk_embeddings.append(batch_embeddings)
+    chunk_embeddings = np.vstack(chunk_embeddings).astype(np.float32)
+    np.save(embeddings_file, chunk_embeddings)
+    logger.info(f"Saved {len(chunk_embeddings)} embeddings to {embeddings_file}")
 
     dimension = 384
     index = faiss.IndexFlatL2(dimension)
     index.add(chunk_embeddings)
     logger.info(f"FAISS index created with {index.ntotal} vectors")
 
-    faiss.write_index(index, 'D:\\doctor_gpt_final\\faiss_index.bin')
-    with open('D:\\doctor_gpt_final\\text_chunks.pkl', 'wb') as f:
+    faiss.write_index(index, os.path.join(BASE_DIR, 'faiss_index.bin'))
+    with open(os.path.join(BASE_DIR, 'text_chunks.pkl'), 'wb') as f:
         pickle.dump(text_chunks, f)
     logger.info("FAISS index and text chunks saved")
-
-class Document:
-    def __init__(self, page_content):
-        self.page_content = page_content
-
-if not os.path.exists('D:\\doctor_gpt_final\\faiss_index.bin'):
-    create_medical_index()
 
 # ---------------------------- FAISS Setup --------------------------------------
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 logger.info(f"Using device: {device}")
 
+index_path = os.path.join(BASE_DIR, 'faiss_index.bin')
+chunks_path = os.path.join(BASE_DIR, 'text_chunks.pkl')
+embeddings_path = os.path.join(BASE_DIR, 'embeddings.npy')
+
+# Check if existing files are valid
+files_valid = all([
+    os.path.exists(index_path) and is_valid_file(index_path, '.bin'),
+    os.path.exists(chunks_path) and is_valid_file(chunks_path, '.pkl'),
+    os.path.exists(embeddings_path) and is_valid_file(embeddings_path, '.npy')
+])
+
+# Regenerate if any file is missing or invalid
+if not files_valid:
+    logger.info("Index files missing or invalid, regenerating...")
+    create_medical_index(max_chunks=10000)  # Limit chunks for faster testing
+
+# Load FAISS index and text chunks
 try:
-    index = faiss.read_index('D:\\doctor_gpt_final\\faiss_index.bin')
-    with open('D:\\doctor_gpt_final\\text_chunks.pkl', 'rb') as f:
+    index = faiss.read_index(index_path)
+    with open(chunks_path, 'rb') as f:
         text_chunks = pickle.load(f)
     logger.info(f"Loaded FAISS index with {index.ntotal} vectors")
 except Exception as e:
     logger.error(f"Error loading FAISS index or text chunks: {e}")
-    raise
+    logger.info("Regenerating index files...")
+    create_medical_index(max_chunks=10000)  # Limit chunks for faster testing
+    try:
+        index = faiss.read_index(index_path)
+        with open(chunks_path, 'rb') as f:
+            text_chunks = pickle.load(f)
+        logger.info(f"Loaded regenerated FAISS index with {index.ntotal} vectors")
+    except Exception as e:
+        logger.error(f"Failed to load regenerated FAISS index: {e}")
+        raise
 
 model = SentenceTransformer('all-MiniLM-L6-v2', device=device)
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -157,11 +263,13 @@ def doctor_gpt(user_query: str) -> str:
     logger.info(f"Processing medical query: {user_query}")
     return doctor_gpt_ai(user_query=user_query)
 
-# Existing gita_chatbot code (preserved)
+# Note: gita_chatbot references undefined gitabot_ai. Commenting out until implemented.
+"""
 def gita_chatbot(user_query: str) -> str:
     logger.info("Searching for similar docs in the Bhagavad Gita vector DB")
     doc_list = search_db(user_query=user_query)
     logger.info("Calling the gitabot_ai to get answer")
-    answer = gitabot_ai(user_query=user_query, doc_list=doc_list)
+    answer = gitabot_ai(user_query=user_query, doc_list=doc_list)  # gitabot_ai undefined
     logger.info("Returning the final answer")
     return answer
+"""
