@@ -11,3 +11,4 @@ streamlit-chat==0.1.1
 pytest==8.3.4
 pytest-mock==3.14.0
 -e .
+faiss-cpu==1.7.4
