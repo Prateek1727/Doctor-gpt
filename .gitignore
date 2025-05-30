@@ -171,8 +171,8 @@ cython_debug/
 .pypirc
 
 
-.csv
-.npy
-.bin
-.pkl
-.pdf
+train.csv
+embeddings.npy
+faiss_index.bin
+text_chunks.pkl
+
