@@ -78,4 +78,3 @@ if __name__ == "__main__":
     logger.info(f"Running test query: {test_query}")
     response = generate_response(test_query)
     print(f"Test Query: {test_query}")
-    print(f"Response: {response}")

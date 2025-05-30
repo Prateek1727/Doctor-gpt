@@ -1,1 +1,1 @@
-# medicalbot
+# DoctorGPT
