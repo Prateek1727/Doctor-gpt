@@ -1,7 +1,11 @@
 import streamlit as st
 from streamlit_chat import message
 import random
-from src.chatbot import doctor_gpt
+try:
+    from src.chatbot import doctor_gpt
+except ImportError as e:
+    st.error(f"Failed to import doctor_gpt: {str(e)}. Please ensure src.chatbot defines doctor_gpt.")
+    st.stop()
 from loguru import logger
 import time
 
@@ -70,9 +74,8 @@ if user_input:
 
 # Test block
 if __name__ == "__main__":
-    # Simulate a user query for testing
     test_query = "What are the symptoms of diabetes?"
     logger.info(f"Running test query: {test_query}")
     response = generate_response(test_query)
     print(f"Test Query: {test_query}")
-    print(f"Response: {response}")  
+    print(f"Response: {response}")

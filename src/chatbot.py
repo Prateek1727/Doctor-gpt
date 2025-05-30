@@ -6,7 +6,7 @@ import pickle
 from langchain_groq import ChatGroq
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts.prompt import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import pandas as pd
@@ -157,11 +157,3 @@ def doctor_gpt(user_query: str) -> str:
     logger.info(f"Processing medical query: {user_query}")
     return doctor_gpt_ai(user_query=user_query)
 
-# Existing gita_chatbot code (preserved)
-def gita_chatbot(user_query: str) -> str:
-    logger.info("Searching for similar docs in the Bhagavad Gita vector DB")
-    doc_list = search_db(user_query=user_query)
-    logger.info("Calling the gitabot_ai to get answer")
-    answer = gitabot_ai(user_query=user_query, doc_list=doc_list)
-    logger.info("Returning the final answer")
-    return answer
