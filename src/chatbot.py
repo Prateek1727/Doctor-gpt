@@ -7,9 +7,10 @@ import pickle
 from langchain_groq import ChatGroq
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts.prompt import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
+from langchain_huggingface import HuggingFaceEmbeddings
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document  # Use LangChain's built-in Document
 import pandas as pd
 import torch
 from loguru import logger
@@ -29,15 +30,10 @@ if groq_api_key is None:
     raise ValueError("GROQ_API_KEY not set.")
 os.environ['GROQ_API_KEY'] = groq_api_key
 
-# Define Document class
-class Document:
-    def __init__(self, page_content):
-        self.page_content = page_content
-
 # Define paths
 INDEX_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'index')
 DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Data', 'train.csv')
-TRAIN_CSV_URL = "YOUR_GOOGLE_DRIVE_OR_S3_URL_HERE"  # Replace with your URL
+TRAIN_CSV_URL = "YOUR_GOOGLE_DRIVE_OR_S3_URL_HERE"  # <-- SET THIS TO YOUR ACTUAL URL!
 EMBEDDINGS_FILE = os.path.join(INDEX_DIR, 'embeddings.npy')
 INDEX_FILE = os.path.join(INDEX_DIR, 'faiss_index.bin')
 CHUNKS_FILE = os.path.join(INDEX_DIR, 'text_chunks.pkl')
@@ -46,9 +42,11 @@ CHUNKS_FILE = os.path.join(INDEX_DIR, 'text_chunks.pkl')
 os.makedirs(INDEX_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
 
-# Download train.csv if missing
 def download_train_csv():
     if not os.path.exists(DATA_PATH):
+        if TRAIN_CSV_URL == "YOUR_GOOGLE_DRIVE_OR_S3_URL_HERE":
+            logger.error("TRAIN_CSV_URL is not set. Please set it to your file URL.")
+            raise ValueError("TRAIN_CSV_URL is not set.")
         logger.info(f"Downloading train.csv from {TRAIN_CSV_URL}")
         try:
             response = requests.get(TRAIN_CSV_URL, stream=True)
@@ -63,7 +61,6 @@ def download_train_csv():
             logger.error(f"Failed to download train.csv: {e}")
             raise
 
-# ---------------------------- FAISS Indexing --------------------------------------
 def create_medical_index():
     download_train_csv()
     if not os.path.exists(DATA_PATH):
@@ -77,7 +74,11 @@ def create_medical_index():
         output_text = str(row.get('output', '')) if 'output' in row else ''
         text = f"{input_text} {output_text}".strip()
         if text:
-            documents.append(Document(page_content=text))
+            documents.append(Document(page_content=text, metadata={}))
+
+    if not documents:
+        logger.error("No data found in CSV, cannot build index.")
+        raise ValueError("No data found in CSV, cannot build index.")
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=8000, chunk_overlap=20)
     text_chunks = text_splitter.split_documents(documents)
@@ -143,7 +144,6 @@ def search_db(user_query: str, k: int = 3) -> list:
         logger.error(f"Error in search_db: {e}")
         return []
 
-# ---------------------------- LLM --------------------------------------
 llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0)
 
 def doctor_gpt_ai(user_query: str) -> str:
