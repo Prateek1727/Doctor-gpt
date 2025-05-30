@@ -12,3 +12,6 @@ pytest==8.3.4
 pytest-mock==3.14.0
 -e .
 faiss-cpu==1.7.4
+pandas==2.2.2
+numpy==1.26.4
+torch==2.4.1
