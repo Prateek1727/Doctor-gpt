@@ -171,8 +171,10 @@ cython_debug/
 .pypirc
 
 
+# Ignore large files
 train.csv
 embeddings.npy
 faiss_index.bin
 text_chunks.pkl
+Data/medical_dataset.pdf
 
