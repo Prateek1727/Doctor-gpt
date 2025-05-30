@@ -1,5 +1,4 @@
 import os
-import warnings
 from dotenv import load_dotenv
 import faiss
 import numpy as np
@@ -7,18 +6,15 @@ import pickle
 from langchain_groq import ChatGroq
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts.prompt import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
 from sentence_transformers import SentenceTransformer
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import pandas as pd
 import torch
 from loguru import logger
 
-# Suppress torch.classes warning
-warnings.filterwarnings("ignore", category=UserWarning, module="torch")
-
 # Load environment variables
-load_dotenv(dotenv_path='/mount/src/doctor-gpt/.env')
+load_dotenv(dotenv_path='D:\\doctor_gpt_final\\.env')
 
 # Validate GROQ_API_KEY
 groq_api_key = os.getenv("GROQ_API_KEY")
@@ -27,28 +23,14 @@ if groq_api_key is None:
     raise ValueError("GROQ_API_KEY not set.")
 os.environ['GROQ_API_KEY'] = groq_api_key
 
-# Define Document class
-class Document:
-    def __init__(self, page_content):
-        self.page_content = page_content
-
-# Define paths
-INDEX_DIR = '/mount/src/doctor-gpt/index'
-DATA_PATH = '/mount/src/doctor-gpt/Data/train.csv'
-EMBEDDINGS_FILE = os.path.join(INDEX_DIR, 'embeddings.npy')
-INDEX_FILE = os.path.join(INDEX_DIR, 'faiss_index.bin')
-CHUNKS_FILE = os.path.join(INDEX_DIR, 'text_chunks.pkl')
-
-# Ensure index directory exists
-os.makedirs(INDEX_DIR, exist_ok=True)
-
 # ---------------------------- FAISS Indexing (Run Once) --------------------------------------
 def create_medical_index():
-    if not os.path.exists(DATA_PATH):
-        logger.error(f"Data file not found: {DATA_PATH}")
-        raise FileNotFoundError(f"Data file not found: {DATA_PATH}")
+    data_path = 'D:\\doctor_gpt_final\\Data\\train.csv'
+    if not os.path.exists(data_path):
+        logger.error(f"Data file not found: {data_path}")
+        raise FileNotFoundError(f"Data file not found: {data_path}")
 
-    df = pd.read_csv(DATA_PATH, encoding='utf-8', encoding_errors='replace')
+    df = pd.read_csv(data_path, encoding='utf-8', encoding_errors='replace')
     documents = []
     for _, row in df.iterrows():
         input_text = str(row.get('input', '')) if 'input' in row else ''
@@ -64,34 +46,38 @@ def create_medical_index():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = SentenceTransformer('all-MiniLM-L6-v2', device=device)
     texts = [chunk.page_content for chunk in text_chunks]
+    embeddings_file = 'D:\\doctor_gpt_final\\embeddings.npy'
 
-    if os.path.exists(EMBEDDINGS_FILE):
+    if os.path.exists(embeddings_file):
         logger.info("Loading precomputed embeddings...")
-        chunk_embeddings = np.load(EMBEDDINGS_FILE)
+        chunk_embeddings = np.load(embeddings_file)
         if chunk_embeddings.shape[0] != len(texts):
             logger.warning(f"Embedding mismatch: {chunk_embeddings.shape[0]} vs {len(texts)}. Re-embedding...")
             chunk_embeddings = model.encode(texts, batch_size=128, show_progress_bar=True)
             chunk_embeddings = np.array(chunk_embeddings, dtype=np.float32)
-            np.save(EMBEDDINGS_FILE, chunk_embeddings)
+            np.save(embeddings_file, chunk_embeddings)
     else:
         logger.info(f"Embedding {len(texts)} chunks...")
         chunk_embeddings = model.encode(texts, batch_size=128, show_progress_bar=True)
         chunk_embeddings = np.array(chunk_embeddings, dtype=np.float32)
-        np.save(EMBEDDINGS_FILE, chunk_embeddings)
-        logger.info(f"Saved {len(chunk_embeddings)} embeddings to {EMBEDDINGS_FILE}")
+        np.save(embeddings_file, chunk_embeddings)
+        logger.info(f"Saved {len(chunk_embeddings)} embeddings to {embeddings_file}")
 
     dimension = 384
     index = faiss.IndexFlatL2(dimension)
     index.add(chunk_embeddings)
     logger.info(f"FAISS index created with {index.ntotal} vectors")
 
-    faiss.write_index(index, INDEX_FILE)
-    with open(CHUNKS_FILE, 'wb') as f:
+    faiss.write_index(index, 'D:\\doctor_gpt_final\\faiss_index.bin')
+    with open('D:\\doctor_gpt_final\\text_chunks.pkl', 'wb') as f:
         pickle.dump(text_chunks, f)
     logger.info("FAISS index and text chunks saved")
 
-# Check and create index if missing
-if not os.path.exists(INDEX_FILE):
+class Document:
+    def __init__(self, page_content):
+        self.page_content = page_content
+
+if not os.path.exists('D:\\doctor_gpt_final\\faiss_index.bin'):
     create_medical_index()
 
 # ---------------------------- FAISS Setup --------------------------------------
@@ -99,8 +85,8 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 logger.info(f"Using device: {device}")
 
 try:
-    index = faiss.read_index(INDEX_FILE)
-    with open(CHUNKS_FILE, 'rb') as f:
+    index = faiss.read_index('D:\\doctor_gpt_final\\faiss_index.bin')
+    with open('D:\\doctor_gpt_final\\text_chunks.pkl', 'rb') as f:
         text_chunks = pickle.load(f)
     logger.info(f"Loaded FAISS index with {index.ntotal} vectors")
 except Exception as e:
@@ -170,3 +156,4 @@ def doctor_gpt(user_query: str) -> str:
     """
     logger.info(f"Processing medical query: {user_query}")
     return doctor_gpt_ai(user_query=user_query)
+
