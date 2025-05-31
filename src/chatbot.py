@@ -14,9 +14,15 @@ from langchain_core.documents import Document
 import pandas as pd
 import torch
 from loguru import logger
+import logging
+
+# ------------------ Place FILE_IDS here immediately after imports ------------------
+FILE_IDS = {
+    'train.csv': '1J8ne-L_Wwl73JBl8aLFnLJpYtIsc5pxz'
+}
+# -----------------------------------------------------------------------------------
 
 # Suppress torch warnings
-import logging
 logging.getLogger('torch').setLevel(logging.ERROR)
 
 # Load environment variables
@@ -57,11 +63,6 @@ def download_file(file_id, dest_path):
     except Exception as e:
         logger.error(f"Failed to download {file_id}: {e}")
         raise
-
-# File IDs (Google Drive file ID for train.csv only)
-file_id = {
-    'train.csv': '1J8ne-L_Wwl73JBl8aLFnLJpYtIsc5pxz'
-}
 
 # Validate file content
 def is_valid_file(file_path, expected_ext):
