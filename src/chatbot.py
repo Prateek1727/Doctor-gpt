@@ -59,7 +59,7 @@ def download_file(file_id, dest_path):
         raise
 
 # File IDs (Google Drive file ID for train.csv only)
-FILE_IDS = {
+file_id = {
     'train.csv': '1J8ne-L_Wwl73JBl8aLFnLJpYtIsc5pxz'
 }
 
